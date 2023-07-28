@@ -1,0 +1,81 @@
+node {
+    def webAppDir
+    def imageExists = true
+    stage('Workspace Preparation') {
+        echo "Deleting workspace contents ..."
+        cleanWs()
+    }
+    stage('Stop App') {
+        def result = sh label: 'Looking for docker image ' + APP_NAME, returnStdout: true, script: 'docker images ' + APP_NAME + ' --format json'
+        try {
+            def image = readJSON text: result, returnPojo: true
+            sh label: 'Stopping docker container'+ APP_NAME, script: 'docker stop ' + APP_NAME
+        }
+        catch (e) {
+            imageExists = false;
+            echo "No such App"
+        }
+        
+    }
+    stage('Remove Docker container') {
+        if ( imageExists ) {
+            sh label: 'Remove APIs ' + APP_NAME, script: 'docker rm -f ' + APP_NAME
+        }
+    }
+    stage('Remove App') {
+        if ( imageExists ) {
+            sh label: 'Remove App ' + APP_NAME, script: 'docker rmi -f ' + APP_NAME
+        }
+    }
+    stage('Extracting new app code') {
+        unstash 'web-app.zip'
+        unzip dir: 'web-app', glob: '', zipFile: 'web-app.zip'
+    }
+    stage('Find index.html') {
+        def files = findFiles excludes: '', glob: '**/index.html'
+        echo "files count " + files.size()
+        if ( files.size() < 1) {
+            echo "No index.html found!"
+            throw Exception("No index.html found!");
+        }
+        else if ( files.size() == 1 ) {
+            echo "Found index.html: " + files[0].path
+            String[] s = files[0].path.split("/")
+            webAppDir = ""
+            for (int i = 0; i < s.length-1; i++){
+                webAppDir = webAppDir + s[i];
+                if ( (i+1) < (s.length-1) ) {
+                    webAppDir = webAppDir + "/";
+                }
+            }
+            echo "Web App root Dir: " + webAppDir
+            
+        }
+        else {
+            echo "Found multiple index.html files!"
+            files.each { file ->
+            echo " - File: " + file.name + ", Path: " + file.path + ", isDirectory: " + file.directory
+        }
+            throw Exception("Multiple index.html files found!");
+        }
+        
+        
+    }
+    
+    stage('Dockerize Aapp') {
+        sh label: 'Create Dockerfile for ' + APP_NAME, script: 'echo FROM httpd:2.4 >> ' + webAppDir + '/Dockerfile'
+        sh label: 'Create Dockerfile for ' + APP_NAME, script: 'echo COPY . /usr/local/apache2/htdocs/ >> ' + webAppDir + '/Dockerfile'
+        
+    }
+    
+    stage('Create Docker Image') {
+        dir(webAppDir) {
+            sh label: 'Create Image ' + APP_NAME, script: 'docker build --no-cache -t ' + APP_NAME + ' .'
+        }
+    }
+    
+    stage('Start APIs') {
+        sh label: 'start APIs ' + APP_NAME, script: 'docker run -dit -p ${port}:80 --name=' + APP_NAME + ' ' + APP_NAME
+    }
+    
+}
